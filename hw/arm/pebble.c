@@ -288,7 +288,7 @@ void pebble_set_button_state(uint32_t button_state)
 
 // ------------------------------------------------------------------------------------------
 // Connect up the uarts to serial drivers that connect to the outside world
-void pebble_connect_uarts(Stm32Uart *uart[], const PblBoardConfig *board_config)
+PebbleControl *pebble_connect_uarts(Stm32Uart *uart[], const PblBoardConfig *board_config)
 {
     // This UART is used for control messages, put in our pebble_control device in between
     // the qemu serial chr and the uart. This enables us to intercept and act selectively
@@ -297,9 +297,10 @@ void pebble_connect_uarts(Stm32Uart *uart[], const PblBoardConfig *board_config)
                                              uart[board_config->pebble_control_uart_index]);
 
     stm32_uart_connect(uart[board_config->dbgserial_uart_index], serial_hds[2], 0);
+    return s_pebble_control;
 }
 
-void pebble_connect_uarts_stm32f7xx(Stm32F7xxUart *uart[], const PblBoardConfig *board_config)
+PebbleControl *pebble_connect_uarts_stm32f7xx(Stm32F7xxUart *uart[], const PblBoardConfig *board_config)
 {
     // This UART is used for control messages, put in our pebble_control device in between
     // the qemu serial chr and the uart. This enables us to intercept and act selectively
@@ -308,12 +309,14 @@ void pebble_connect_uarts_stm32f7xx(Stm32F7xxUart *uart[], const PblBoardConfig 
             uart[board_config->pebble_control_uart_index]);
 
     stm32f7xx_uart_connect(uart[board_config->dbgserial_uart_index], serial_hds[2], 0);
+    return s_pebble_control;
 }
 
 
 // -----------------------------------------------------------------------------------------
-// Init button handling
-void pebble_init_buttons(Stm32Gpio *gpio[], const PblButtonMap *map)
+// -----------------------------------------------------------------------------------------
+// Init button IRQs without registering default handler
+void pebble_init_button_irqs(Stm32Gpio *gpio[], const PblButtonMap *map)
 {
     int i;
     for (i = 0; i < PBL_NUM_BUTTONS; i++) {
@@ -327,6 +330,12 @@ void pebble_init_buttons(Stm32Gpio *gpio[], const PblButtonMap *map)
     }
     // GPIO A, pin 0 is the WKUP pin.
     s_button_wakeup = qdev_get_gpio_in((DeviceState *)gpio[STM32_GPIOA_INDEX], 0);
+}
+
+// Init button handling
+void pebble_init_buttons(Stm32Gpio *gpio[], const PblButtonMap *map)
+{
+    pebble_init_button_irqs(gpio, map);
     qemu_add_kbd_event_handler(pebble_key_handler, s_button_irq);
 }
 

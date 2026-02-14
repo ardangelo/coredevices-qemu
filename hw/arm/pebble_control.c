@@ -76,7 +76,8 @@ typedef enum {
   QemuProtocol_Battery = 5,
   QemuProtocol_Accel = 6,
   QemuProtocol_Vibration = 7,
-  QemuProtocol_Button = 8
+  QemuProtocol_Button = 8,
+  QemuProtocol_Keyboard = 12
 } QemuProtocol;
 
 
@@ -141,6 +142,13 @@ typedef struct QEMU_PACKED {
   // ButtonId enum values.
   uint8_t     button_state;
 } QemuProtocolButtonHeader;
+
+
+// QemuProtocol_Keyboard
+typedef struct QEMU_PACKED {
+  uint8_t keycode;
+  uint8_t is_down;
+} QemuProtocolKeyboardHeader;
 
 
 
@@ -490,6 +498,19 @@ void pebble_control_send_vibe_notification(PebbleControl *s, bool on)
       .on = on
     };
     pebble_control_send_packet(s, QemuProtocol_Vibration, &hdr, sizeof(hdr));
+}
+
+// -----------------------------------------------------------------------------------
+// Send a keyboard event to the Pebble
+void pebble_control_send_keyboard_event(PebbleControl *s, uint8_t keycode, bool is_down)
+{
+    DPRINTF("%s: keycode %d down %d\n", __func__, keycode, is_down);
+
+    QemuProtocolKeyboardHeader hdr = {
+      .keycode = keycode,
+      .is_down = is_down
+    };
+    pebble_control_send_packet(s, QemuProtocol_Keyboard, &hdr, sizeof(hdr));
 }
 
 // -----------------------------------------------------------------------------------

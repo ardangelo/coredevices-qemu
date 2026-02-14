@@ -21,25 +21,16 @@
  */
 
 /*
- * QEMU Sharp LS013B7DH01 Memory LCD device model.
- */
-
-/*
- * TODO:
- * Add part number attribute and set ROWS/COLS appropriately.
- * Add attribute for 'off' bit colour for simulating backlight.
- * Add display rotation attribute.
- * Handle 24bpp host displays.
+ * QEMU Sharp Memory LCD device model.
+ * Supports:
+ *  - LS013B7DH01 (144x168)
+ *  - LS027B7DH01 (400x240)
  */
 
 #include "qemu-common.h"
 #include "ui/console.h"
 #include "ui/pixel_ops.h"
 #include "hw/ssi.h"
-
-#define NUM_ROWS 168
-#define NUM_COLS 144 // 18 bytes
-#define NUM_COL_BYTES (NUM_COLS / 8)
 
 typedef enum {
     COMMAND,
@@ -52,7 +43,7 @@ typedef struct {
     SSISlave ssidev;
     QemuConsole *con;
     bool redraw;
-    uint8_t framebuffer[NUM_ROWS * NUM_COL_BYTES];
+    uint8_t *framebuffer;
     int fbindex;
     xfer_state_t state;
 
@@ -68,6 +59,10 @@ typedef struct {
      * Use the "rotate_display" property to flip it.
      */
     bool rotate_display;
+
+    /* Configurable dimensions */
+    uint32_t num_rows;
+    uint32_t num_cols;
 } lcd_state;
 
 static uint8_t
@@ -83,6 +78,9 @@ sm_lcd_transfer(SSISlave *dev, uint32_t data)
     /* XXX QEMU's SPI infrastructure is implicitly MSB-first */
     data = bitswap(data);
 
+    uint32_t num_col_bytes = s->num_cols / 8;
+    uint32_t fb_size = s->num_rows * num_col_bytes;
+
     switch(s->state) {
     case COMMAND:
         data &= 0xfd; /* Mask VCOM bit */
@@ -91,14 +89,18 @@ sm_lcd_transfer(SSISlave *dev, uint32_t data)
             s->state = LINENO;
             break;
         case 0x04: /* Clear Screen */
-            memset(s->framebuffer, 0, sizeof(*s->framebuffer));
+            if (s->framebuffer) {
+                memset(s->framebuffer, 0, fb_size);
+            }
             s->redraw = true;
             break;
         case 0x00: /* Toggle VCOM */
             break;
         default:
             /* Simulate confused display controller. */
-            memset(s->framebuffer, 0x55, sizeof(*s->framebuffer));
+            if (s->framebuffer) {
+                memset(s->framebuffer, 0x55, fb_size);
+            }
             s->redraw = true;
             break;
         }
@@ -107,20 +109,22 @@ sm_lcd_transfer(SSISlave *dev, uint32_t data)
         if (data == 0) {
             s->state = COMMAND;
         } else {
-            s->fbindex = (data - 1) * NUM_COL_BYTES;
+            s->fbindex = (data - 1) * num_col_bytes;
             s->state = DATA;
         }
         break;
     case DATA:
-        s->framebuffer[s->fbindex++] = data;
-        if (s->fbindex % NUM_COL_BYTES == 0) {
+        if (s->framebuffer && s->fbindex < fb_size) {
+            s->framebuffer[s->fbindex++] = data;
+        }
+        if (s->fbindex % num_col_bytes == 0) {
             s->state = TRAILER;
         }
         break;
     case TRAILER:
         if (data != 0) {
             qemu_log_mask(LOG_GUEST_ERROR,
-              "ls013 memory lcd received non-zero data in TRAILER\n");
+              "sharp memory lcd received non-zero data in TRAILER\n");
         }
         s->state = LINENO;
         s->redraw = true;
@@ -132,6 +136,10 @@ sm_lcd_transfer(SSISlave *dev, uint32_t data)
 static void sm_lcd_update_display(void *arg)
 {
     lcd_state *s = arg;
+
+    if (!s->framebuffer) {
+        return;
+    }
 
     uint8_t *d;
     uint32_t colour_on, colour_off, colour;
@@ -162,7 +170,7 @@ static void sm_lcd_update_display(void *arg)
             default:
                 abort();
         }
-        int total_bytes = NUM_ROWS * NUM_COLS * bytes_per_pixel
+        int total_bytes = s->num_rows * s->num_cols * bytes_per_pixel
                         - abs(s->vibrate_offset) * bytes_per_pixel;
         if (s->vibrate_offset > 0) {
             memmove(d, d + s->vibrate_offset * bytes_per_pixel, total_bytes);
@@ -170,7 +178,7 @@ static void sm_lcd_update_display(void *arg)
             memmove(d - s->vibrate_offset * bytes_per_pixel, d, total_bytes);
         }
         s->vibrate_offset *= -1;
-        dpy_gfx_update(s->con, 0, 0, NUM_COLS, NUM_ROWS);
+        dpy_gfx_update(s->con, 0, 0, s->num_cols, s->num_rows);
         return;
     }
 
@@ -209,12 +217,14 @@ static void sm_lcd_update_display(void *arg)
         return;
     }
 
-    for (y = 0; y < NUM_ROWS; y++) {
-        for (x = 0; x < NUM_COLS; x++) {
+    uint32_t num_col_bytes = s->num_cols / 8;
+
+    for (y = 0; y < s->num_rows; y++) {
+        for (x = 0; x < s->num_cols; x++) {
             /* Rotate the display if necessary */
-            int xr = (s->rotate_display) ? NUM_COLS - 1 - x : x;
-            int yr = (s->rotate_display) ? NUM_ROWS - 1 - y : y;
-            bool on = s->framebuffer[yr * NUM_COL_BYTES + xr / 8] & 1 << (xr % 8);
+            int xr = (s->rotate_display) ? s->num_cols - 1 - x : x;
+            int yr = (s->rotate_display) ? s->num_rows - 1 - y : y;
+            bool on = s->framebuffer[yr * num_col_bytes + xr / 8] & 1 << (xr % 8);
             colour = on ? colour_on : colour_off;
             switch(bpp) {
                 case 8:
@@ -236,7 +246,7 @@ static void sm_lcd_update_display(void *arg)
         }
     }
 
-    dpy_gfx_update(s->con, 0, 0, NUM_COLS, NUM_ROWS);
+    dpy_gfx_update(s->con, 0, 0, s->num_cols, s->num_rows);
     s->redraw = false;
 }
 
@@ -297,7 +307,10 @@ static void sm_lcd_power_ctl(void *opaque, int n, int level)
     assert(n == 0);
 
     if (!level && s->power_on) {
-        memset(&s->framebuffer, 0, sizeof(s->framebuffer));
+        if (s->framebuffer) {
+            uint32_t fb_size = s->num_rows * (s->num_cols / 8);
+            memset(s->framebuffer, 0, fb_size);
+        }
         s->redraw = true;
         s->power_on = false;
     }
@@ -308,7 +321,10 @@ static void sm_lcd_power_ctl(void *opaque, int n, int level)
 static void sm_lcd_reset(DeviceState *dev)
 {
     lcd_state *s = (lcd_state *)dev;
-    memset(&s->framebuffer, 0, sizeof(s->framebuffer));
+    if (s->framebuffer) {
+        uint32_t fb_size = s->num_rows * (s->num_cols / 8);
+        memset(s->framebuffer, 0, fb_size);
+    }
     s->redraw = true;
 }
 
@@ -326,7 +342,12 @@ static int sm_lcd_init(SSISlave *dev)
     s->brightness = 0.0;
 
     s->con = graphic_console_init(DEVICE(dev), 0, &sm_lcd_ops, s);
-    qemu_console_resize(s->con, NUM_COLS, NUM_ROWS);
+    qemu_console_resize(s->con, s->num_cols, s->num_rows);
+
+    /* Allocate framebuffer */
+    uint32_t num_col_bytes = s->num_cols / 8;
+    uint32_t fb_size = s->num_rows * num_col_bytes;
+    s->framebuffer = g_malloc0(fb_size);
 
     /* This callback informs us that brightness control is enabled */
     qdev_init_gpio_in_named(DEVICE(dev), sm_lcd_backlight_enable_cb,
@@ -347,8 +368,10 @@ static int sm_lcd_init(SSISlave *dev)
     return 0;
 }
 
-static Property sm_lcd_init_properties[] = {
+static Property sm_lcd_properties[] = {
     DEFINE_PROP_BOOL("rotate_display", lcd_state, rotate_display, true),
+    DEFINE_PROP_UINT32("num_rows", lcd_state, num_rows, 168),
+    DEFINE_PROP_UINT32("num_cols", lcd_state, num_cols, 144),
     DEFINE_PROP_END_OF_LIST()
 };
 
@@ -361,7 +384,7 @@ static void sm_lcd_class_init(ObjectClass *klass, void *data)
     k->transfer = sm_lcd_transfer;
     k->cs_polarity = SSI_CS_LOW;
     k->parent_class.reset = sm_lcd_reset;
-    dc->props = sm_lcd_init_properties;
+    dc->props = sm_lcd_properties;
 }
 
 static const TypeInfo sm_lcd_info = {
@@ -371,9 +394,36 @@ static const TypeInfo sm_lcd_info = {
     .class_init    = sm_lcd_class_init,
 };
 
+static Property sharp_mip_400_properties[] = {
+    DEFINE_PROP_BOOL("rotate_display", lcd_state, rotate_display, false),
+    DEFINE_PROP_UINT32("num_rows", lcd_state, num_rows, 240),
+    DEFINE_PROP_UINT32("num_cols", lcd_state, num_cols, 400),
+    DEFINE_PROP_END_OF_LIST()
+};
+
+static void sharp_mip_400_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    SSISlaveClass *k = SSI_SLAVE_CLASS(klass);
+
+    k->init = sm_lcd_init;
+    k->transfer = sm_lcd_transfer;
+    k->cs_polarity = SSI_CS_LOW;
+    k->parent_class.reset = sm_lcd_reset;
+    dc->props = sharp_mip_400_properties;
+}
+
+static const TypeInfo sharp_mip_400_info = {
+    .name          = "sharp-mip-400x240",
+    .parent        = TYPE_SSI_SLAVE,
+    .instance_size = sizeof(lcd_state),
+    .class_init    = sharp_mip_400_class_init,
+};
+
 static void sm_lcd_register(void)
 {
     type_register_static(&sm_lcd_info);
+    type_register_static(&sharp_mip_400_info);
 }
 
 type_init(sm_lcd_register);

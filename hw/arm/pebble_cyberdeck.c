@@ -145,6 +145,11 @@ static void cyberdeck_kbd_event(DeviceState *dev, QemuConsole *src,
         return;
     }
 
+    // Only process keyboard events when the QEMU window is focused
+    if (src && !qemu_console_is_visible(src)) {
+        return;
+    }
+
     InputKeyEvent *key = evt->u.key;
     bool is_down = key->down;
 

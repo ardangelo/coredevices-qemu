@@ -488,6 +488,41 @@ static void pebble_control_send_packet(PebbleControl *s, QemuProtocol protocol, 
   qemu_chr_fe_write(s->chr, (uint8_t *)&footer, sizeof(footer));
 }
 
+// -----------------------------------------------------------------------------------------
+// Send a packet TO the firmware (inject into UART)
+// This is used for events generated internally by QEMU that need to be delivered to the firmware
+static void pebble_control_send_packet_to_firmware(PebbleControl *s, QemuProtocol protocol,
+                                                     void *data, uint32_t len)
+{
+  uint8_t packet_buffer[PBLCONTROL_BUF_LEN];
+  uint32_t offset = 0;
+
+  // Build the header
+  QemuCommChannelHdr hdr = (QemuCommChannelHdr) {
+    .signature = htons(QEMU_HEADER_SIGNATURE),
+    .protocol = htons(protocol),
+    .len = htons(len)
+  };
+  memcpy(packet_buffer + offset, &hdr, sizeof(hdr));
+  offset += sizeof(hdr);
+
+  // Copy the data
+  memcpy(packet_buffer + offset, data, len);
+  offset += len;
+
+  // Build the footer
+  QemuCommChannelFooter footer = (QemuCommChannelFooter) {
+    .signature = htons(QEMU_FOOTER_SIGNATURE)
+  };
+  memcpy(packet_buffer + offset, &footer, sizeof(footer));
+  offset += sizeof(footer);
+
+  // Inject into the UART (delivers to firmware)
+  DPRINTF("%s: Injecting %d byte packet (protocol %d) into firmware UART\n",
+          __func__, offset, protocol);
+  s->uart_chr_read(s->uart, packet_buffer, offset);
+}
+
 // -----------------------------------------------------------------------------------
 // Send a vibe notification to the host
 void pebble_control_send_vibe_notification(PebbleControl *s, bool on)
@@ -501,7 +536,7 @@ void pebble_control_send_vibe_notification(PebbleControl *s, bool on)
 }
 
 // -----------------------------------------------------------------------------------
-// Send a keyboard event to the Pebble
+// Send a keyboard event to the Pebble firmware
 void pebble_control_send_keyboard_event(PebbleControl *s, uint8_t keycode, bool is_down)
 {
     DPRINTF("%s: keycode %d down %d\n", __func__, keycode, is_down);
@@ -510,7 +545,7 @@ void pebble_control_send_keyboard_event(PebbleControl *s, uint8_t keycode, bool 
       .keycode = keycode,
       .is_down = is_down
     };
-    pebble_control_send_packet(s, QemuProtocol_Keyboard, &hdr, sizeof(hdr));
+    pebble_control_send_packet_to_firmware(s, QemuProtocol_Keyboard, &hdr, sizeof(hdr));
 }
 
 // -----------------------------------------------------------------------------------

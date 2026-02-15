@@ -2,286 +2,232 @@
 #include "hw/boards.h"
 #include "hw/ssi.h"
 #include "sysemu/sysemu.h"
+
+#undef CONFIG_CURSES
 #include "ui/console.h"
+
+#include "standard-headers/linux/input.h"
+
+#include "ui/input.h"
 #include "pebble_control.h"
 
-// Pebble Key IDs from src/fw/services/common/keyboard_codes.h
-#define PBL_KEY_ESC 1
-#define PBL_KEY_1 2
-#define PBL_KEY_2 3
-#define PBL_KEY_3 4
-#define PBL_KEY_4 5
-#define PBL_KEY_5 6
-#define PBL_KEY_6 7
-#define PBL_KEY_7 8
-#define PBL_KEY_8 9
-#define PBL_KEY_9 10
-#define PBL_KEY_0 11
-#define PBL_KEY_MINUS 12
-#define PBL_KEY_EQUAL 13
-#define PBL_KEY_BACKSPACE 14
-#define PBL_KEY_TAB 15
-#define PBL_KEY_Q 16
-#define PBL_KEY_W 17
-#define PBL_KEY_E 18
-#define PBL_KEY_R 19
-#define PBL_KEY_T 20
-#define PBL_KEY_Y 21
-#define PBL_KEY_U 22
-#define PBL_KEY_I 23
-#define PBL_KEY_O 24
-#define PBL_KEY_P 25
-#define PBL_KEY_LEFTBRACE 26
-#define PBL_KEY_RIGHTBRACE 27
-#define PBL_KEY_ENTER 28
-#define PBL_KEY_LEFTCTRL 29
-#define PBL_KEY_A 30
-#define PBL_KEY_S 31
-#define PBL_KEY_D 32
-#define PBL_KEY_F 33
-#define PBL_KEY_G 34
-#define PBL_KEY_H 35
-#define PBL_KEY_J 36
-#define PBL_KEY_K 37
-#define PBL_KEY_L 38
-#define PBL_KEY_SEMICOLON 39
-#define PBL_KEY_APOSTROPHE 40
-#define PBL_KEY_GRAVE 41
-#define PBL_KEY_LEFTSHIFT 42
-#define PBL_KEY_BACKSLASH 43
-#define PBL_KEY_Z 44
-#define PBL_KEY_X 45
-#define PBL_KEY_C 46
-#define PBL_KEY_V 47
-#define PBL_KEY_B 48
-#define PBL_KEY_N 49
-#define PBL_KEY_M 50
-#define PBL_KEY_COMMA 51
-#define PBL_KEY_DOT 52
-#define PBL_KEY_SLASH 53
-#define PBL_KEY_RIGHTSHIFT 54
-#define PBL_KEY_KPASTERISK 55
-#define PBL_KEY_LEFTALT 56
-#define PBL_KEY_SPACE 57
-#define PBL_KEY_CAPSLOCK 58
-#define PBL_KEY_F1 59
-#define PBL_KEY_F2 60
-#define PBL_KEY_F3 61
-#define PBL_KEY_F4 62
-#define PBL_KEY_F5 63
-#define PBL_KEY_F6 64
-#define PBL_KEY_F7 65
-#define PBL_KEY_F8 66
-#define PBL_KEY_F9 67
-#define PBL_KEY_F10 68
-#define PBL_KEY_NUMLOCK 69
-#define PBL_KEY_SCROLLLOCK 70
-#define PBL_KEY_KP7 71
-#define PBL_KEY_KP8 72
-#define PBL_KEY_KP9 73
-#define PBL_KEY_KPMINUS 74
-#define PBL_KEY_KP4 75
-#define PBL_KEY_KP5 76
-#define PBL_KEY_KP6 77
-#define PBL_KEY_KPPLUS 78
-#define PBL_KEY_KP1 79
-#define PBL_KEY_KP2 80
-#define PBL_KEY_KP3 81
-#define PBL_KEY_KP0 82
-#define PBL_KEY_KPDOT 83
-#define PBL_KEY_F11 87
-#define PBL_KEY_F12 88
-#define PBL_KEY_KPENTER 96
-#define PBL_KEY_RIGHTCTRL 97
-#define PBL_KEY_KPSLASH 98
-#define PBL_KEY_SYSRQ 99
-#define PBL_KEY_RIGHTALT 100
-#define PBL_KEY_HOME 102
-#define PBL_KEY_UP 103
-#define PBL_KEY_PAGEUP 104
-#define PBL_KEY_LEFT 105
-#define PBL_KEY_RIGHT 106
-#define PBL_KEY_END 107
-#define PBL_KEY_DOWN 108
-#define PBL_KEY_PAGEDOWN 109
-#define PBL_KEY_INSERT 110
-#define PBL_KEY_DELETE 111
+// Map QKeyCode (from QEMU new input API) → Linux input keycode (Pebble firmware)
+// This is the same mapping as used in hw/input/virtio-input-hid.c
+// KEY_* values match standard Linux KEY_* codes from <linux/input.h>
+// 0 = unmapped
+static const unsigned int qcode_to_pebble_key[Q_KEY_CODE_MAX] = {
+    [Q_KEY_CODE_ESC]                 = KEY_ESC,
+    [Q_KEY_CODE_1]                   = KEY_1,
+    [Q_KEY_CODE_2]                   = KEY_2,
+    [Q_KEY_CODE_3]                   = KEY_3,
+    [Q_KEY_CODE_4]                   = KEY_4,
+    [Q_KEY_CODE_5]                   = KEY_5,
+    [Q_KEY_CODE_6]                   = KEY_6,
+    [Q_KEY_CODE_7]                   = KEY_7,
+    [Q_KEY_CODE_8]                   = KEY_8,
+    [Q_KEY_CODE_9]                   = KEY_9,
+    [Q_KEY_CODE_0]                   = KEY_0,
+    [Q_KEY_CODE_MINUS]               = KEY_MINUS,
+    [Q_KEY_CODE_EQUAL]               = KEY_EQUAL,
+    [Q_KEY_CODE_BACKSPACE]           = KEY_BACKSPACE,
 
-static uint8_t scancode_to_pebble_key(int code) {
-    switch (code) {
-        case 0x01: return PBL_KEY_ESC;
-        case 0x02: return PBL_KEY_1;
-        case 0x03: return PBL_KEY_2;
-        case 0x04: return PBL_KEY_3;
-        case 0x05: return PBL_KEY_4;
-        case 0x06: return PBL_KEY_5;
-        case 0x07: return PBL_KEY_6;
-        case 0x08: return PBL_KEY_7;
-        case 0x09: return PBL_KEY_8;
-        case 0x0a: return PBL_KEY_9;
-        case 0x0b: return PBL_KEY_0;
-        case 0x0c: return PBL_KEY_MINUS;
-        case 0x0d: return PBL_KEY_EQUAL;
-        case 0x0e: return PBL_KEY_BACKSPACE;
-        case 0x0f: return PBL_KEY_TAB;
-        case 0x10: return PBL_KEY_Q;
-        case 0x11: return PBL_KEY_W;
-        case 0x12: return PBL_KEY_E;
-        case 0x13: return PBL_KEY_R;
-        case 0x14: return PBL_KEY_T;
-        case 0x15: return PBL_KEY_Y;
-        case 0x16: return PBL_KEY_U;
-        case 0x17: return PBL_KEY_I;
-        case 0x18: return PBL_KEY_O;
-        case 0x19: return PBL_KEY_P;
-        case 0x1a: return PBL_KEY_LEFTBRACE;
-        case 0x1b: return PBL_KEY_RIGHTBRACE;
-        case 0x1c: return PBL_KEY_ENTER;
-        case 0x1d: return PBL_KEY_LEFTCTRL;
-        case 0x1e: return PBL_KEY_A;
-        case 0x1f: return PBL_KEY_S;
-        case 0x20: return PBL_KEY_D;
-        case 0x21: return PBL_KEY_F;
-        case 0x22: return PBL_KEY_G;
-        case 0x23: return PBL_KEY_H;
-        case 0x24: return PBL_KEY_J;
-        case 0x25: return PBL_KEY_K;
-        case 0x26: return PBL_KEY_L;
-        case 0x27: return PBL_KEY_SEMICOLON;
-        case 0x28: return PBL_KEY_APOSTROPHE;
-        case 0x29: return PBL_KEY_GRAVE;
-        case 0x2a: return PBL_KEY_LEFTSHIFT;
-        case 0x2b: return PBL_KEY_BACKSLASH;
-        case 0x2c: return PBL_KEY_Z;
-        case 0x2d: return PBL_KEY_X;
-        case 0x2e: return PBL_KEY_C;
-        case 0x2f: return PBL_KEY_V;
-        case 0x30: return PBL_KEY_B;
-        case 0x31: return PBL_KEY_N;
-        case 0x32: return PBL_KEY_M;
-        case 0x33: return PBL_KEY_COMMA;
-        case 0x34: return PBL_KEY_DOT;
-        case 0x35: return PBL_KEY_SLASH;
-        case 0x36: return PBL_KEY_RIGHTSHIFT;
-        case 0x37: return PBL_KEY_KPASTERISK;
-        case 0x38: return PBL_KEY_LEFTALT;
-        case 0x39: return PBL_KEY_SPACE;
-        case 0x3a: return PBL_KEY_CAPSLOCK;
-        case 0x3b: return PBL_KEY_F1;
-        case 0x3c: return PBL_KEY_F2;
-        case 0x3d: return PBL_KEY_F3;
-        case 0x3e: return PBL_KEY_F4;
-        case 0x3f: return PBL_KEY_F5;
-        case 0x40: return PBL_KEY_F6;
-        case 0x41: return PBL_KEY_F7;
-        case 0x42: return PBL_KEY_F8;
-        case 0x43: return PBL_KEY_F9;
-        case 0x44: return PBL_KEY_F10;
-        case 0x45: return PBL_KEY_NUMLOCK;
-        case 0x46: return PBL_KEY_SCROLLLOCK;
-        case 0x47: return PBL_KEY_KP7;
-        case 0x48: return PBL_KEY_KP8;
-        case 0x49: return PBL_KEY_KP9;
-        case 0x4a: return PBL_KEY_KPMINUS;
-        case 0x4b: return PBL_KEY_KP4;
-        case 0x4c: return PBL_KEY_KP5;
-        case 0x4d: return PBL_KEY_KP6;
-        case 0x4e: return PBL_KEY_KPPLUS;
-        case 0x4f: return PBL_KEY_KP1;
-        case 0x50: return PBL_KEY_KP2;
-        case 0x51: return PBL_KEY_KP3;
-        case 0x52: return PBL_KEY_KP0;
-        case 0x53: return PBL_KEY_KPDOT;
-        case 0x57: return PBL_KEY_F11;
-        case 0x58: return PBL_KEY_F12;
-        case 0x9c: return PBL_KEY_KPENTER;
-        case 0x9d: return PBL_KEY_RIGHTCTRL;
-        case 0xb8: return PBL_KEY_RIGHTALT;
-        case 0xc7: return PBL_KEY_HOME;
-        case 0xc8: return PBL_KEY_UP;
-        case 0xc9: return PBL_KEY_PAGEUP;
-        case 0xcb: return PBL_KEY_LEFT;
-        case 0xcd: return PBL_KEY_RIGHT;
-        case 0xcf: return PBL_KEY_END;
-        case 0xd0: return PBL_KEY_DOWN;
-        case 0xd1: return PBL_KEY_PAGEDOWN;
-        case 0xd2: return PBL_KEY_INSERT;
-        case 0xd3: return PBL_KEY_DELETE;
-    }
-    return 0;
-}
+    [Q_KEY_CODE_TAB]                 = KEY_TAB,
+    [Q_KEY_CODE_Q]                   = KEY_Q,
+    [Q_KEY_CODE_W]                   = KEY_W,
+    [Q_KEY_CODE_E]                   = KEY_E,
+    [Q_KEY_CODE_R]                   = KEY_R,
+    [Q_KEY_CODE_T]                   = KEY_T,
+    [Q_KEY_CODE_Y]                   = KEY_Y,
+    [Q_KEY_CODE_U]                   = KEY_U,
+    [Q_KEY_CODE_I]                   = KEY_I,
+    [Q_KEY_CODE_O]                   = KEY_O,
+    [Q_KEY_CODE_P]                   = KEY_P,
+    [Q_KEY_CODE_BRACKET_LEFT]        = KEY_LEFTBRACE,
+    [Q_KEY_CODE_BRACKET_RIGHT]       = KEY_RIGHTBRACE,
+    [Q_KEY_CODE_RET]                 = KEY_ENTER,
 
-static void pebble_cyberdeck_key_handler(void *opaque, int keycode)
+    [Q_KEY_CODE_CTRL]                = KEY_LEFTCTRL,
+    [Q_KEY_CODE_A]                   = KEY_A,
+    [Q_KEY_CODE_S]                   = KEY_S,
+    [Q_KEY_CODE_D]                   = KEY_D,
+    [Q_KEY_CODE_F]                   = KEY_F,
+    [Q_KEY_CODE_G]                   = KEY_G,
+    [Q_KEY_CODE_H]                   = KEY_H,
+    [Q_KEY_CODE_J]                   = KEY_J,
+    [Q_KEY_CODE_K]                   = KEY_K,
+    [Q_KEY_CODE_L]                   = KEY_L,
+    [Q_KEY_CODE_SEMICOLON]           = KEY_SEMICOLON,
+    [Q_KEY_CODE_APOSTROPHE]          = KEY_APOSTROPHE,
+    [Q_KEY_CODE_GRAVE_ACCENT]        = KEY_GRAVE,
+
+    [Q_KEY_CODE_SHIFT]               = KEY_LEFTSHIFT,
+    [Q_KEY_CODE_BACKSLASH]           = KEY_BACKSLASH,
+    [Q_KEY_CODE_Z]                   = KEY_Z,
+    [Q_KEY_CODE_X]                   = KEY_X,
+    [Q_KEY_CODE_C]                   = KEY_C,
+    [Q_KEY_CODE_V]                   = KEY_V,
+    [Q_KEY_CODE_B]                   = KEY_B,
+    [Q_KEY_CODE_N]                   = KEY_N,
+    [Q_KEY_CODE_M]                   = KEY_M,
+    [Q_KEY_CODE_COMMA]               = KEY_COMMA,
+    [Q_KEY_CODE_DOT]                 = KEY_DOT,
+    [Q_KEY_CODE_SLASH]               = KEY_SLASH,
+    [Q_KEY_CODE_SHIFT_R]             = KEY_RIGHTSHIFT,
+
+    [Q_KEY_CODE_ALT]                 = KEY_LEFTALT,
+    [Q_KEY_CODE_SPC]                 = KEY_SPACE,
+    [Q_KEY_CODE_CAPS_LOCK]           = KEY_CAPSLOCK,
+
+    [Q_KEY_CODE_F1]                  = KEY_F1,
+    [Q_KEY_CODE_F2]                  = KEY_F2,
+    [Q_KEY_CODE_F3]                  = KEY_F3,
+    [Q_KEY_CODE_F4]                  = KEY_F4,
+    [Q_KEY_CODE_F5]                  = KEY_F5,
+    [Q_KEY_CODE_F6]                  = KEY_F6,
+    [Q_KEY_CODE_F7]                  = KEY_F7,
+    [Q_KEY_CODE_F8]                  = KEY_F8,
+    [Q_KEY_CODE_F9]                  = KEY_F9,
+    [Q_KEY_CODE_F10]                 = KEY_F10,
+    [Q_KEY_CODE_NUM_LOCK]            = KEY_NUMLOCK,
+    [Q_KEY_CODE_SCROLL_LOCK]         = KEY_SCROLLLOCK,
+
+    [Q_KEY_CODE_KP_0]                = KEY_KP0,
+    [Q_KEY_CODE_KP_1]                = KEY_KP1,
+    [Q_KEY_CODE_KP_2]                = KEY_KP2,
+    [Q_KEY_CODE_KP_3]                = KEY_KP3,
+    [Q_KEY_CODE_KP_4]                = KEY_KP4,
+    [Q_KEY_CODE_KP_5]                = KEY_KP5,
+    [Q_KEY_CODE_KP_6]                = KEY_KP6,
+    [Q_KEY_CODE_KP_7]                = KEY_KP7,
+    [Q_KEY_CODE_KP_8]                = KEY_KP8,
+    [Q_KEY_CODE_KP_9]                = KEY_KP9,
+    [Q_KEY_CODE_KP_SUBTRACT]         = KEY_KPMINUS,
+    [Q_KEY_CODE_KP_ADD]              = KEY_KPPLUS,
+    [Q_KEY_CODE_KP_DECIMAL]          = KEY_KPDOT,
+    [Q_KEY_CODE_KP_ENTER]            = KEY_KPENTER,
+    [Q_KEY_CODE_KP_DIVIDE]           = KEY_KPSLASH,
+    [Q_KEY_CODE_KP_MULTIPLY]         = KEY_KPASTERISK,
+
+    [Q_KEY_CODE_F11]                 = KEY_F11,
+    [Q_KEY_CODE_F12]                 = KEY_F12,
+
+    [Q_KEY_CODE_CTRL_R]              = KEY_RIGHTCTRL,
+    [Q_KEY_CODE_SYSRQ]               = KEY_SYSRQ,
+    [Q_KEY_CODE_ALT_R]               = KEY_RIGHTALT,
+
+    [Q_KEY_CODE_HOME]                = KEY_HOME,
+    [Q_KEY_CODE_UP]                  = KEY_UP,
+    [Q_KEY_CODE_PGUP]                = KEY_PAGEUP,
+    [Q_KEY_CODE_LEFT]                = KEY_LEFT,
+    [Q_KEY_CODE_RIGHT]               = KEY_RIGHT,
+    [Q_KEY_CODE_END]                 = KEY_END,
+    [Q_KEY_CODE_DOWN]                = KEY_DOWN,
+    [Q_KEY_CODE_PGDN]                = KEY_PAGEDOWN,
+    [Q_KEY_CODE_INSERT]              = KEY_INSERT,
+    [Q_KEY_CODE_DELETE]              = KEY_DELETE,
+
+    [Q_KEY_CODE_META_L]              = KEY_LEFTMETA,
+    [Q_KEY_CODE_META_R]              = KEY_RIGHTMETA,
+    [Q_KEY_CODE_MENU]                = KEY_MENU,
+};
+
+typedef struct {
+    PebbleControl *pctrl;
+    uint32_t button_state;
+} CyberdeckKbdState;
+
+static void cyberdeck_kbd_event(DeviceState *dev, QemuConsole *src,
+                                InputEvent *evt)
 {
-    PebbleControl *s = opaque;
-    bool is_down = !(keycode & 0x80);
-    int code = keycode & 0x7f;
-    
-    // Check for arrow keys and map to nav buttons 
-    static uint32_t s_button_state = 0;
-    
-    int button_id = PBL_BUTTON_ID_NONE;
-    static int prev_keycode = 0;
-    
-    if (code == 224) { // 0xE0
-        prev_keycode = keycode;
+    CyberdeckKbdState *s = (CyberdeckKbdState *)dev;
+
+    if (evt->type != INPUT_EVENT_KIND_KEY) {
         return;
     }
 
-    // Arrow keys (standard set 1)
-    // Note: If extended (prev_keycode was 0xE0), we can map them.
-    // QEMU 0x75=Left, 0x72=Down etc.. waiting, above table says 75 is KEY_KP4.
-    // Wait, Standard Set 1:
-    // UP: E0 48
-    // DOWN: E0 50
-    // LEFT: E0 4B
-    // RIGHT: E0 4D
-    // My table says:
-    // 0x48 = KP8 (Up arrow on numpad) -> KEY_KP8
-    // 0x4B = KP4 (Left arrow on numpad) -> KEY_KP4
-    // 0x50 = KP2 (Down arrow on numpad) -> KEY_KP2
-    // 0x4D = KP6 (Right arrow on numpad) -> KEY_KP6
-    
-    // Extended keys map to dedicated arrows:
-    // E0 48 -> UP
-    
-    // pebble.c pebble_key_handler uses raw codes: 72, 80, 75, 77.
-    // 72 (0x48) = Up
-    // 80 (0x50) = Down
-    // 75 (0x4B) = Left
-    // 77 (0x4D) = Right
-    // And checks prev_keycode == 224.
-    
-    if (prev_keycode == 224 || prev_keycode == (224 | 0x80)) {
-        switch (code) {
-            case 72: button_id = PBL_BUTTON_ID_UP; break; // Up
-            case 80: button_id = PBL_BUTTON_ID_DOWN; break; // Down
-            case 75: button_id = PBL_BUTTON_ID_BACK; break; // Left -> Back
-            case 77: button_id = PBL_BUTTON_ID_SELECT; break; // Right -> Select
+    InputKeyEvent *key = evt->u.key;
+    bool is_down = key->down;
+
+    // Workaround to fix wrong arrow key scancodes
+    if (key->key->type == KEY_VALUE_KIND_NUMBER) {
+        int64_t number = key->key->u.number;
+        switch (number) {
+            case 0xb7: key->key->u.number = 0xc8; break;
+            case 0xb8: key->key->u.number = 0xcb; break;
+            case 0xc6: key->key->u.number = 0xcd; break;
+            case 0x0:  key->key->u.number = 0xd0; break;
         }
     }
-    
-    prev_keycode = keycode;
-    
+
+    // Debug: Print KeyValue details BEFORE conversion
+    fprintf(stderr, "cyberdeck_kbd: KeyValue type=%d ", key->key->type);
+    if (key->key->type == KEY_VALUE_KIND_NUMBER) {
+        fprintf(stderr, "number=0x%llx ", (unsigned long long)key->key->u.number);
+    } else if (key->key->type == KEY_VALUE_KIND_QCODE) {
+        fprintf(stderr, "qcode=%d ", key->key->u.qcode);
+    }
+    fprintf(stderr, "down=%d\n", is_down);
+
+    // Now convert to qcode
+    int qcode = qemu_input_key_value_to_qcode(key->key);
+    fprintf(stderr, "  -> converted qcode=0x%x (%d)\n", qcode, qcode);
+
+    /* Arrow keys → nav buttons (for Pebble compatibility) */
+    PblButtonID button_id = PBL_BUTTON_ID_NONE;
+    switch (qcode) {
+        case Q_KEY_CODE_UP:
+            button_id = PBL_BUTTON_ID_UP;
+            fprintf(stderr, "  Mapping to PBL_BUTTON_ID_UP\n");
+            break;
+        case Q_KEY_CODE_DOWN:
+            button_id = PBL_BUTTON_ID_DOWN;
+            fprintf(stderr, "  Mapping to PBL_BUTTON_ID_DOWN\n");
+            break;
+        case Q_KEY_CODE_LEFT:
+            button_id = PBL_BUTTON_ID_BACK;
+            fprintf(stderr, "  Mapping to PBL_BUTTON_ID_BACK\n");
+            break;
+        case Q_KEY_CODE_RIGHT:
+            button_id = PBL_BUTTON_ID_SELECT;
+            fprintf(stderr, "  Mapping to PBL_BUTTON_ID_SELECT\n");
+            break;
+    }
+
     if (button_id != PBL_BUTTON_ID_NONE) {
         if (is_down) {
-            s_button_state |= (1 << button_id);
+            s->button_state |= (1 << button_id);
         } else {
-            s_button_state &= ~(1 << button_id);
+            s->button_state &= ~(1 << button_id);
         }
-        pebble_set_button_state(s_button_state);
-        // Do NOT consume arrow keys for keyboard input if they are nav buttons
+        pebble_set_button_state(s->button_state);
         return;
     }
-    
-    // Map to Pebble Key ID
-    uint8_t pkey = scancode_to_pebble_key(code);
-    if (pkey != 0) {
-        if (s) {
-            pebble_control_send_keyboard_event(s, pkey, is_down);
+
+    /* All other keys - keyboard events to firmware */
+    if (qcode >= 0 && qcode < Q_KEY_CODE_MAX) {
+        unsigned int pkey = qcode_to_pebble_key[qcode];
+        if (pkey != 0) {
+            if (s->pctrl) {
+                fprintf(stderr, "  Sending keyboard event: pkey=%d\n", pkey);
+                pebble_control_send_keyboard_event(s->pctrl, pkey, is_down);
+            } else {
+                fprintf(stderr, "  ERROR: pctrl is NULL!\n");
+            }
+        } else {
+            if (is_down) {
+                fprintf(stderr, "  Unmapped qcode: %d\n", qcode);
+            }
         }
     }
 }
+
+static QemuInputHandler cyberdeck_kbd_handler = {
+    .name  = "cyberdeck-keyboard",
+    .mask  = INPUT_EVENT_MASK_KEY,
+    .event = cyberdeck_kbd_event,
+};
+
+static CyberdeckKbdState s_cyberdeck_kbd;
 
 static const PblBoardConfig s_board_config_cyberdeck = {
     .dbgserial_uart_index = 0,       // USART1 -> debug serial
@@ -388,8 +334,13 @@ static void pebble_cyberdeck_init(MachineState *machine)
     // Init the buttons IRQs (without default handler)
     pebble_init_button_irqs(gpio, board_config->button_map);
     
-    // Register our custom keyboard/button handler
-    qemu_add_kbd_event_handler(pebble_cyberdeck_key_handler, pctrl);
+    // Register keyboard/button handler using the new QEMU input API
+    // (bypasses broken scancode translation in the legacy path)
+    s_cyberdeck_kbd.pctrl = pctrl;
+    s_cyberdeck_kbd.button_state = 0;
+    QemuInputHandlerState *ihs = qemu_input_handler_register(
+        (DeviceState *)&s_cyberdeck_kbd, &cyberdeck_kbd_handler);
+    qemu_input_handler_activate(ihs);
 
     // Create the board device and wire it up
     qemu_irq display_vibe;

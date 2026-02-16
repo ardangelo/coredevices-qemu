@@ -164,37 +164,23 @@ static void cyberdeck_kbd_event(DeviceState *dev, QemuConsole *src,
         }
     }
 
-    // Debug: Print KeyValue details BEFORE conversion
-    fprintf(stderr, "cyberdeck_kbd: KeyValue type=%d ", key->key->type);
-    if (key->key->type == KEY_VALUE_KIND_NUMBER) {
-        fprintf(stderr, "number=0x%llx ", (unsigned long long)key->key->u.number);
-    } else if (key->key->type == KEY_VALUE_KIND_QCODE) {
-        fprintf(stderr, "qcode=%d ", key->key->u.qcode);
-    }
-    fprintf(stderr, "down=%d\n", is_down);
-
     // Now convert to qcode
     int qcode = qemu_input_key_value_to_qcode(key->key);
-    fprintf(stderr, "  -> converted qcode=0x%x (%d)\n", qcode, qcode);
 
     /* Arrow keys → nav buttons (for Pebble compatibility) */
     PblButtonID button_id = PBL_BUTTON_ID_NONE;
     switch (qcode) {
         case Q_KEY_CODE_UP:
             button_id = PBL_BUTTON_ID_UP;
-            fprintf(stderr, "  Mapping to PBL_BUTTON_ID_UP\n");
             break;
         case Q_KEY_CODE_DOWN:
             button_id = PBL_BUTTON_ID_DOWN;
-            fprintf(stderr, "  Mapping to PBL_BUTTON_ID_DOWN\n");
             break;
         case Q_KEY_CODE_LEFT:
             button_id = PBL_BUTTON_ID_BACK;
-            fprintf(stderr, "  Mapping to PBL_BUTTON_ID_BACK\n");
             break;
         case Q_KEY_CODE_RIGHT:
             button_id = PBL_BUTTON_ID_SELECT;
-            fprintf(stderr, "  Mapping to PBL_BUTTON_ID_SELECT\n");
             break;
     }
 
@@ -213,14 +199,7 @@ static void cyberdeck_kbd_event(DeviceState *dev, QemuConsole *src,
         unsigned int pkey = qcode_to_pebble_key[qcode];
         if (pkey != 0) {
             if (s->pctrl) {
-                fprintf(stderr, "  Sending keyboard event: pkey=%d\n", pkey);
                 pebble_control_send_keyboard_event(s->pctrl, pkey, is_down);
-            } else {
-                fprintf(stderr, "  ERROR: pctrl is NULL!\n");
-            }
-        } else {
-            if (is_down) {
-                fprintf(stderr, "  Unmapped qcode: %d\n", qcode);
             }
         }
     }

@@ -2,6 +2,7 @@
 #include "hw/boards.h"
 #include "hw/ssi.h"
 #include "sysemu/sysemu.h"
+#include "sysemu/char.h"
 
 #undef CONFIG_CURSES
 #include "ui/console.h"
@@ -10,6 +11,7 @@
 
 #include "ui/input.h"
 #include "pebble_control.h"
+#include "pebble_cyberdeck_display.h"
 
 // Map QKeyCode (from QEMU new input API) → Linux input keycode (Pebble firmware)
 // This is the same mapping as used in hw/input/virtio-input-hid.c
@@ -283,10 +285,15 @@ static void pebble_cyberdeck_init(MachineState *machine)
 
 
     /* --- Display ------------------------------------------------  */
-    // Use the 400x240 Sharp MIP display
+    // Use the cyberdeck mux display (nRF SPI + K230 chardev, with lcd_sel mux)
     spi = (SSIBus *)qdev_get_child_bus(stm.spi_dev[1], "ssi"); // SPI2
-    DeviceState *display_dev = ssi_create_slave_no_init(spi, "sharp-mip-400x240");
-    // Dimensions etc are set by default property values for this type
+    DeviceState *display_dev = ssi_create_slave_no_init(spi, "sharp-mip-cyberdeck-mux");
+
+    // Wire K230 display chardev before init (named chardev "k230_display" added by wscript)
+    CharDriverState *k230_display_chr = qemu_chr_find("k230_display");
+    if (k230_display_chr) {
+        cyberdeck_mux_set_k230_chr(display_dev, k230_display_chr);
+    }
     qdev_init_nofail(display_dev);
 
     qemu_irq backlight_enable;
@@ -304,6 +311,10 @@ static void pebble_cyberdeck_init(MachineState *machine)
     display_power = qdev_get_gpio_in_named(display_dev, "power_ctl", 0);
     qdev_connect_gpio_out_named((DeviceState *)cpu->env.nvic, "power_out", 0,
                                   display_power);
+
+    // lcd_sel: controlled by firmware via QemuProtocol_LcdSel → pebble.c
+    qemu_irq lcd_sel_irq = qdev_get_gpio_in_named(display_dev, "lcd_sel", 0);
+    pebble_set_lcd_sel_irq(lcd_sel_irq);
 
 
     // Connect up the uarts

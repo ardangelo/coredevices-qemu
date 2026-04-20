@@ -49,6 +49,10 @@ void pebble_32f7xx_init(MachineState *machine, const PblBoardConfig *board_confi
 
 // This method used externally (by pebble_control) for setting the button state
 void pebble_set_button_state(uint32_t button_state);
+// Store the display mux lcd_sel GPIO irq (called from pebble_cyberdeck.c)
+void pebble_set_lcd_sel_irq(qemu_irq irq);
+// Drive the display mux (called from pebble_control's LcdSel handler)
+void pebble_set_lcd_sel(bool k230);
 void pebble_set_qemu_settings(DeviceState *rtc_dev);
 PebbleControl *pebble_connect_uarts(Stm32Uart *uart[], const PblBoardConfig *board_config);
 PebbleControl *pebble_connect_uarts_stm32f7xx(Stm32F7xxUart *uart[], const PblBoardConfig *board_config);

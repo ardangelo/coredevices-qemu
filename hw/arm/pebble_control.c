@@ -77,7 +77,8 @@ typedef enum {
   QemuProtocol_Accel = 6,
   QemuProtocol_Vibration = 7,
   QemuProtocol_Button = 8,
-  QemuProtocol_Keyboard = 12
+  QemuProtocol_Keyboard = 12,
+  QemuProtocol_LcdSel = 13
 } QemuProtocol;
 
 
@@ -142,6 +143,11 @@ typedef struct QEMU_PACKED {
   // ButtonId enum values.
   uint8_t     button_state;
 } QemuProtocolButtonHeader;
+
+// QemuProtocol_LcdSel — sent FROM firmware TO host when lcd_sel changes
+typedef struct QEMU_PACKED {
+  uint8_t k230;  // 1 = K230 drives display, 0 = nRF drives display
+} QemuProtocolLcdSelHeader;
 
 
 // QemuProtocol_Keyboard
@@ -227,12 +233,27 @@ static void pebble_control_button_msg_callback(PebbleControl *s, const uint8_t *
 
 
 // -----------------------------------------------------------------------------------------
+static void pebble_control_lcd_sel_msg_callback(PebbleControl *s, const uint8_t *data,
+                                                uint32_t len)
+{
+    DPRINTF("%s: \n", __func__);
+    QemuProtocolLcdSelHeader *hdr = (QemuProtocolLcdSelHeader *)data;
+    if (len != sizeof(*hdr)) {
+        EPRINTF("%s: invalid packet\n", __func__);
+        return;
+    }
+    DPRINTF("%s: lcd_sel k230=%d\n", __func__, (int)hdr->k230);
+    pebble_set_lcd_sel(hdr->k230 != 0);
+}
+
+// -----------------------------------------------------------------------------------------
 // Find handler from s_qemu_endpoints for a given protocol
 static const PebbleControlMessageHandler* pebble_control_find_handler(PebbleControl *s,
                                                              uint16_t protocol_id) {
     static const PebbleControlMessageHandler s_msg_endpoints[] = {
       // IMPORTANT: These must be in sorted order!!
-      { QemuProtocol_Button, pebble_control_button_msg_callback },
+      { QemuProtocol_Button,  pebble_control_button_msg_callback },
+      { QemuProtocol_LcdSel, pebble_control_lcd_sel_msg_callback },
     };
 
     size_t i;
@@ -450,7 +471,15 @@ static int pebble_control_write(void *opaque, const uint8_t *buf, int len) {
             break;
         }
 
-        // We have a complete packet, send it out the front end
+        // We have a complete packet — check if we should handle it internally
+        uint16_t out_protocol = ntohs(hdr->protocol);
+        const PebbleControlMessageHandler *out_handler =
+            pebble_control_find_handler(s, out_protocol);
+        if (out_handler) {
+            out_handler->callback(s, (uint8_t *)(hdr + 1), data_len);
+        }
+
+        // Send it out the front end
         int bytes_sent;
         DPRINTF("%s: Sending packet of %d bytes to host\n", __func__, total_size);
         while (total_size) {

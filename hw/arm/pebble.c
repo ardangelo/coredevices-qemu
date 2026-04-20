@@ -182,6 +182,9 @@ static PebbleControl *s_pebble_control;
 static qemu_irq s_button_irq[PBL_NUM_BUTTONS];
 static qemu_irq s_button_wakeup;
 
+// lcd_sel GPIO input on the display mux device (set by pebble_set_lcd_sel_irq)
+static qemu_irq s_lcd_sel_irq;
+
 
 static void prv_send_key_up(void *opaque)
 {
@@ -272,6 +275,23 @@ static void pebble_key_handler(void *arg, int keycode)
     timer_mod(s_button_timer, qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + 250);
 }
 
+
+// ------------------------------------------------------------------------------------------
+// Store the lcd_sel GPIO irq so pebble_set_lcd_sel() can drive it later.
+void pebble_set_lcd_sel_irq(qemu_irq irq)
+{
+    s_lcd_sel_irq = irq;
+}
+
+// ------------------------------------------------------------------------------------------
+// Switch the display mux: false = nRF (Pebble), true = K230.
+// Called from pebble_control's QemuProtocol_LcdSel handler.
+void pebble_set_lcd_sel(bool k230)
+{
+    if (s_lcd_sel_irq) {
+        qemu_set_irq(s_lcd_sel_irq, k230 ? 1 : 0);
+    }
+}
 
 // ------------------------------------------------------------------------------------------
 // This method used externally (by pebble_control) for setting a given button state

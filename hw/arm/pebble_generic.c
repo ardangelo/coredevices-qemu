@@ -8,6 +8,7 @@
  *   pebble-emery   - Cortex-M33, 512KB RAM, 4MB flash
  *   pebble-flint   - Cortex-M4, 256KB RAM, 4MB flash
  *   pebble-gabbro  - Cortex-M33, 512KB RAM, 4MB flash
+ *   pebble-cyberdeck-evt3 - Cortex-M4, 512KB RAM, 4MB flash
  *
  * Copyright (c) 2026 Core Devices LLC
  * SPDX-License-Identifier: GPL-2.0-or-later
@@ -66,6 +67,23 @@ static const PblGenericBoardConfig board_cfg_flint = {
     .sysclk_frq    = PBL_SYSCLK_FRQ,
     .display_width = 144,
     .display_height = 168,
+    .display_bpp   = 1,
+    .display_round = false,
+    .has_touch     = false,
+    .has_audio     = true,
+};
+
+static const PblGenericBoardConfig board_cfg_cyberdeck_evt3 = {
+    .name          = "pebble-cyberdeck-evt3",
+    .desc          = "Pebble Cyberdeck EVT3 (Cortex-M4)",
+    .cpu_type      = ARM_CPU_TYPE_NAME("cortex-m4"),
+    .board_type    = PBL_BOARD_CYBERDECK_EVT3,
+    .board_id      = PBL_BOARD_ID_CYBERDECK_EVT3,
+    .flash_size    = 4 * MiB,
+    .ram_size      = 512 * KiB,
+    .sysclk_frq    = PBL_SYSCLK_FRQ,
+    .display_width = 400,
+    .display_height = 240,
     .display_bpp   = 1,
     .display_round = false,
     .has_touch     = false,
@@ -370,6 +388,22 @@ static void pbl_flint_class_init(ObjectClass *oc, const void *data)
     machine_add_audiodev_property(mc);
 }
 
+static void pbl_cyberdeck_evt3_class_init(ObjectClass *oc, const void *data)
+{
+    MachineClass *mc = MACHINE_CLASS(oc);
+    PblGenericMachineClass *pmc = PBL_GENERIC_MACHINE_CLASS(oc);
+    static const char * const valid_cpu_types[] = {
+        ARM_CPU_TYPE_NAME("cortex-m4"),
+        NULL
+    };
+
+    mc->desc = board_cfg_cyberdeck_evt3.desc;
+    mc->default_cpu_type = board_cfg_cyberdeck_evt3.cpu_type;
+    mc->valid_cpu_types = valid_cpu_types;
+    pmc->board_cfg = &board_cfg_cyberdeck_evt3;
+    machine_add_audiodev_property(mc);
+}
+
 static void pbl_gabbro_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
@@ -408,6 +442,12 @@ static const TypeInfo pbl_flint_info = {
     .class_init    = pbl_flint_class_init,
 };
 
+static const TypeInfo pbl_cyberdeck_evt3_info = {
+    .name          = MACHINE_TYPE_NAME("pebble-cyberdeck-evt3"),
+    .parent        = TYPE_PBL_GENERIC_MACHINE,
+    .class_init    = pbl_cyberdeck_evt3_class_init,
+};
+
 static const TypeInfo pbl_gabbro_info = {
     .name          = MACHINE_TYPE_NAME("pebble-gabbro"),
     .parent        = TYPE_PBL_GENERIC_MACHINE,
@@ -419,6 +459,7 @@ static void pbl_generic_machine_init(void)
     type_register_static(&pbl_generic_info);
     type_register_static(&pbl_emery_info);
     type_register_static(&pbl_flint_info);
+    type_register_static(&pbl_cyberdeck_evt3_info);
     type_register_static(&pbl_gabbro_info);
 }
 

@@ -22,6 +22,7 @@
 #define PBL_BOARD_ID_FLINT   1
 #define PBL_BOARD_ID_EMERY   2
 #define PBL_BOARD_ID_GABBRO  3
+#define PBL_BOARD_ID_CYBERDECK_EVT3  4
 
 /* ===== Peripheral type names ===== */
 #define TYPE_PEBBLE_SIMPLE_UART   "pebble-simple-uart"
@@ -78,6 +79,7 @@ typedef enum {
     PBL_BOARD_FLINT,
     PBL_BOARD_EMERY,
     PBL_BOARD_GABBRO,
+    PBL_BOARD_CYBERDECK_EVT3,
 } PblBoardType;
 
 typedef struct {

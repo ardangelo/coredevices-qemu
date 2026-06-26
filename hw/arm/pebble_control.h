@@ -1,6 +1,9 @@
 #ifndef PEBBLE_CONTROL_H
 #define PEBBLE_CONTROL_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #include "qemu/typedefs.h"
 #include "hw/arm/stm32_common.h"
 
@@ -19,5 +22,6 @@ PebbleControl *pebble_control_create(Chardev *chr, Stm32Uart *uart);
 PebbleControl *pebble_control_create_generic(Chardev *chr, DeviceState *uart);
 
 void pebble_control_send_vibe_notification(PebbleControl *s, bool on);
+void pebble_control_send_keyboard_event(PebbleControl *s, uint8_t keycode, bool is_down);
 
 #endif /* PEBBLE_CONTROL_H */

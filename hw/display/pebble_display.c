@@ -40,6 +40,7 @@
 #include "hw/qdev-properties.h"
 #include "ui/console.h"
 #include "ui/pixel_ops.h"
+#include "chardev/char-fe.h"
 
 #define TYPE_PEBBLE_DISPLAY "pebble-display"
 OBJECT_DECLARE_SIMPLE_TYPE(PblDisplay, PEBBLE_DISPLAY)
@@ -77,6 +78,19 @@ OBJECT_DECLARE_SIMPLE_TYPE(PblDisplay, PEBBLE_DISPLAY)
  * readability in ambient light. */
 #define PBL_DISPLAY_AMBIENT_FLOOR 100
 
+typedef enum {
+    K230_LCD_COMMAND,
+    K230_LCD_LINENO,
+    K230_LCD_DATA,
+    K230_LCD_TRAILER,
+} K230LcdState;
+
+static uint8_t bitswap8(uint8_t val)
+{
+    return ((val * 0x0802LU & 0x22110LU) |
+            (val * 0x8020LU & 0x88440LU)) * 0x10101LU >> 16;
+}
+
 struct PblDisplay {
     SysBusDevice parent_obj;
 
@@ -88,6 +102,13 @@ struct PblDisplay {
     /* Framebuffer backing store (written by guest, read by display update) */
     uint8_t *fb;
     uint32_t fb_size;
+
+    uint8_t *k230_fb;
+    uint32_t k230_fbindex;
+    K230LcdState k230_state;
+    CharBackend k230_chr;
+    bool has_k230_chr;
+    bool lcd_sel_k230;
 
     /* Configuration (set via properties before realize) */
     uint32_t width;
@@ -109,6 +130,18 @@ struct PblDisplay {
     int vibe_frame;
     QEMUTimer *vibe_timer;
 };
+
+static PblDisplay *s_active_display;
+void pbl_display_set_lcd_select(bool k230);
+
+void pbl_display_set_lcd_select(bool k230)
+{
+    if (!s_active_display) {
+        return;
+    }
+    s_active_display->lcd_sel_k230 = k230;
+    s_active_display->redraw = true;
+}
 
 static void pbl_display_update_irq(PblDisplay *s)
 {
@@ -140,6 +173,69 @@ static bool pixel_in_round_mask(int x, int y, int w, int h)
     return (dx * dx + dy * dy) <= (r * r);
 }
 
+static bool k230_lcd_process_byte(PblDisplay *s, uint8_t data)
+{
+    uint32_t row_bytes = ((s->width + 31) / 32) * 4;
+    uint32_t fb_size = row_bytes * s->height;
+    bool redraw = false;
+
+    data = bitswap8(data);
+    switch (s->k230_state) {
+    case K230_LCD_COMMAND:
+        data &= 0xfd;
+        if (data == 0x01) {
+            s->k230_state = K230_LCD_LINENO;
+        } else if (data == 0x04) {
+            memset(s->k230_fb, 0, fb_size);
+            redraw = true;
+        }
+        break;
+    case K230_LCD_LINENO:
+        if (data == 0) {
+            s->k230_state = K230_LCD_COMMAND;
+        } else {
+            s->k230_fbindex = (data - 1) * row_bytes;
+            s->k230_state = K230_LCD_DATA;
+        }
+        break;
+    case K230_LCD_DATA:
+        if (s->k230_fbindex < fb_size) {
+            s->k230_fb[s->k230_fbindex++] = data;
+        }
+        if ((s->k230_fbindex % row_bytes) == 0) {
+            s->k230_state = K230_LCD_TRAILER;
+        }
+        break;
+    case K230_LCD_TRAILER:
+        s->k230_state = K230_LCD_LINENO;
+        redraw = true;
+        break;
+    }
+    return redraw;
+}
+
+static int k230_lcd_can_receive(void *opaque)
+{
+    PblDisplay *s = opaque;
+    return 2 + s->height * ((((s->width + 31) / 32) * 4) + 2);
+}
+
+static void k230_lcd_receive(void *opaque, const uint8_t *buf, int size)
+{
+    PblDisplay *s = opaque;
+    for (int i = 0; i < size; i++) {
+        if (k230_lcd_process_byte(s, buf[i]) && s->lcd_sel_k230) {
+            s->redraw = true;
+        }
+    }
+}
+
+static void k230_lcd_event(void *opaque, QEMUChrEvent event)
+{
+    (void)opaque;
+    (void)event;
+}
+
 static void pbl_display_update(void *opaque)
 {
     PblDisplay *s = opaque;
@@ -164,6 +260,7 @@ static void pbl_display_update(void *opaque)
     bpp = surface_bits_per_pixel(surface);
     stride = surface_stride(surface);
     dest = surface_data(surface);
+    uint8_t *src_fb = (s->lcd_sel_k230 && s->k230_fb) ? s->k230_fb : s->fb;
 
     /* Vibration shake offset: alternates +/- 2 pixels horizontally */
     int shake_x = 0;
@@ -190,14 +287,14 @@ static void pbl_display_update(void *opaque)
                 uint32_t row_bytes = ((s->width + 31) / 32) * 4;
                 uint32_t byte_idx = y * row_bytes + src_x / 8;
                 uint32_t bit_idx = src_x & 7;  /* LSB first */
-                bool on = (s->fb[byte_idx] >> bit_idx) & 1;
+                bool on = (src_fb[byte_idx] >> bit_idx) & 1;
                 /* on=1 means white pixel, on=0 means black in PebbleOS 1bpp */
                 uint8_t level = on ? (s->brightness ? s->brightness : 0xFF) : 0;
                 r = g = b = level;
             } else {
                 /* 8bpp ARGB2222 */
                 uint32_t idx = y * s->width + src_x;
-                argb2222_to_rgb(s->fb[idx], &r, &g, &b);
+                argb2222_to_rgb(src_fb[idx], &r, &g, &b);
             }
 
             /* Apply brightness scaling for 8bpp */
@@ -456,6 +553,17 @@ static void pbl_display_realize(DeviceState *dev, Error **errp)
     }
 
     s->fb = g_malloc0(s->fb_size);
+    s->k230_fb = g_malloc0(s->fb_size);
+    s->k230_state = K230_LCD_COMMAND;
+    Chardev *k230_chr = qemu_chr_find("k230_display");
+    if (k230_chr) {
+        qemu_chr_fe_init(&s->k230_chr, k230_chr, &error_abort);
+        qemu_chr_fe_set_handlers(&s->k230_chr, k230_lcd_can_receive,
+                                 k230_lcd_receive, k230_lcd_event, NULL, s,
+                                 NULL, true);
+        s->has_k230_chr = true;
+    }
+    s_active_display = s;
 
     /* Create QemuConsole */
     s->con = graphic_console_init(dev, 0, &pbl_display_ops, s);
@@ -501,6 +609,12 @@ static void pbl_display_reset(DeviceState *dev)
     if (s->fb) {
         memset(s->fb, 0, s->fb_size);
     }
+    if (s->k230_fb) {
+        memset(s->k230_fb, 0, s->fb_size);
+    }
+    s->k230_fbindex = 0;
+    s->k230_state = K230_LCD_COMMAND;
+    s->lcd_sel_k230 = false;
 }
 
 static const Property pbl_display_properties[] = {

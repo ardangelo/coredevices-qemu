@@ -70,7 +70,6 @@ typedef struct QEMU_PACKED {
 } QemuCommChannelFooter;
 
 
-// Protocol IDs
 typedef enum {
   QemuProtocol_SPP = 1,
   QemuProtocol_Tap = 2,
@@ -79,7 +78,9 @@ typedef enum {
   QemuProtocol_Battery = 5,
   QemuProtocol_Accel = 6,
   QemuProtocol_Vibration = 7,
-  QemuProtocol_Button = 8
+  QemuProtocol_Button = 8,
+  QemuProtocol_Keyboard = 12,
+  QemuProtocol_LcdSel = 13,
 } QemuProtocol;
 
 
@@ -144,6 +145,17 @@ typedef struct QEMU_PACKED {
   // ButtonId enum values.
   uint8_t     button_state;
 } QemuProtocolButtonHeader;
+
+// QemuProtocol_Keyboard
+typedef struct QEMU_PACKED {
+  uint8_t keycode;
+  uint8_t is_down;
+} QemuProtocolKeyboardHeader;
+
+// QemuProtocol_LcdSel
+typedef struct QEMU_PACKED {
+  uint8_t k230;
+} QemuProtocolLcdSelHeader;
 
 
 
@@ -229,6 +241,19 @@ static void pebble_control_button_msg_callback(PebbleControl *s, const uint8_t *
     }
 }
 
+static void pebble_control_lcd_sel_msg_callback(PebbleControl *s, const uint8_t *data,
+                                                uint32_t len)
+{
+    (void)s;
+    QemuProtocolLcdSelHeader *hdr = (QemuProtocolLcdSelHeader *)data;
+    if (len != sizeof(*hdr)) {
+        EPRINTF("%s: invalid packet\n", __func__);
+        return;
+    }
+    extern void pbl_display_set_lcd_select(bool k230);
+    pbl_display_set_lcd_select(hdr->k230 != 0);
+}
+
 
 
 // -----------------------------------------------------------------------------------------
@@ -238,6 +263,7 @@ static const PebbleControlMessageHandler* pebble_control_find_handler(PebbleCont
     static const PebbleControlMessageHandler s_msg_endpoints[] = {
       // IMPORTANT: These must be in sorted order!!
       { QemuProtocol_Button, pebble_control_button_msg_callback },
+      { QemuProtocol_LcdSel, pebble_control_lcd_sel_msg_callback },
     };
 
     size_t i;
@@ -520,6 +546,49 @@ static void pebble_control_send_packet(PebbleControl *s, QemuProtocol protocol, 
   };
 
   qemu_chr_fe_write_all(&s->chr, (uint8_t *)&footer, sizeof(footer));
+}
+
+static void pebble_control_send_packet_to_firmware(PebbleControl *s, QemuProtocol protocol,
+                                                   void *data, uint32_t len)
+{
+    uint8_t packet_buffer[PBLCONTROL_BUF_LEN];
+    uint32_t offset = 0;
+
+    QemuCommChannelHdr hdr = {
+        .signature = htons(QEMU_HEADER_SIGNATURE),
+        .protocol = htons(protocol),
+        .len = htons(len),
+    };
+    memcpy(packet_buffer + offset, &hdr, sizeof(hdr));
+    offset += sizeof(hdr);
+    memcpy(packet_buffer + offset, data, len);
+    offset += len;
+    QemuCommChannelFooter footer = {
+        .signature = htons(QEMU_FOOTER_SIGNATURE),
+    };
+    memcpy(packet_buffer + offset, &footer, sizeof(footer));
+    offset += sizeof(footer);
+
+    uint32_t sent = 0;
+    while (sent < offset) {
+        int can_read = s->uart_chr_can_read(s->uart);
+        if (can_read <= 0) {
+            EPRINTF("%s: firmware UART cannot receive injected packet\n", __func__);
+            break;
+        }
+        int chunk = MIN(can_read, (int)(offset - sent));
+        s->uart_chr_read(s->uart, packet_buffer + sent, chunk);
+        sent += chunk;
+    }
+}
+
+void pebble_control_send_keyboard_event(PebbleControl *s, uint8_t keycode, bool is_down)
+{
+    QemuProtocolKeyboardHeader hdr = {
+        .keycode = keycode,
+        .is_down = is_down,
+    };
+    pebble_control_send_packet_to_firmware(s, QemuProtocol_Keyboard, &hdr, sizeof(hdr));
 }
 
 // -----------------------------------------------------------------------------------

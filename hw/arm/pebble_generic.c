@@ -36,6 +36,10 @@
 #include "hw/arm/pebble_generic.h"
 #include "hw/misc/pebble_null_input.h"
 #include "pebble_control.h"
+#include "hw/arm/pebble_gpio.h"
+#include "standard-headers/linux/input.h"
+#include "ui/input.h"
+#include "ui/console.h"
 
 /* ===== Board configurations ===== */
 
@@ -106,6 +110,135 @@ static const PblGenericBoardConfig board_cfg_gabbro = {
     .has_touch     = true,
     .has_audio     = false,
 };
+
+typedef struct {
+    PebbleControl *pctrl;
+    uint32_t button_state;
+} CyberdeckKbdState;
+
+static const unsigned int qcode_to_cyberdeck_key[Q_KEY_CODE__MAX] = {
+    [Q_KEY_CODE_ESC] = KEY_ESC,
+    [Q_KEY_CODE_1] = KEY_1,
+    [Q_KEY_CODE_2] = KEY_2,
+    [Q_KEY_CODE_3] = KEY_3,
+    [Q_KEY_CODE_4] = KEY_4,
+    [Q_KEY_CODE_5] = KEY_5,
+    [Q_KEY_CODE_6] = KEY_6,
+    [Q_KEY_CODE_7] = KEY_7,
+    [Q_KEY_CODE_8] = KEY_8,
+    [Q_KEY_CODE_9] = KEY_9,
+    [Q_KEY_CODE_0] = KEY_0,
+    [Q_KEY_CODE_MINUS] = KEY_MINUS,
+    [Q_KEY_CODE_EQUAL] = KEY_EQUAL,
+    [Q_KEY_CODE_BACKSPACE] = KEY_BACKSPACE,
+    [Q_KEY_CODE_TAB] = KEY_TAB,
+    [Q_KEY_CODE_Q] = KEY_Q,
+    [Q_KEY_CODE_W] = KEY_W,
+    [Q_KEY_CODE_E] = KEY_E,
+    [Q_KEY_CODE_R] = KEY_R,
+    [Q_KEY_CODE_T] = KEY_T,
+    [Q_KEY_CODE_Y] = KEY_Y,
+    [Q_KEY_CODE_U] = KEY_U,
+    [Q_KEY_CODE_I] = KEY_I,
+    [Q_KEY_CODE_O] = KEY_O,
+    [Q_KEY_CODE_P] = KEY_P,
+    [Q_KEY_CODE_BRACKET_LEFT] = KEY_LEFTBRACE,
+    [Q_KEY_CODE_BRACKET_RIGHT] = KEY_RIGHTBRACE,
+    [Q_KEY_CODE_RET] = KEY_ENTER,
+    [Q_KEY_CODE_CTRL] = KEY_LEFTCTRL,
+    [Q_KEY_CODE_A] = KEY_A,
+    [Q_KEY_CODE_S] = KEY_S,
+    [Q_KEY_CODE_D] = KEY_D,
+    [Q_KEY_CODE_F] = KEY_F,
+    [Q_KEY_CODE_G] = KEY_G,
+    [Q_KEY_CODE_H] = KEY_H,
+    [Q_KEY_CODE_J] = KEY_J,
+    [Q_KEY_CODE_K] = KEY_K,
+    [Q_KEY_CODE_L] = KEY_L,
+    [Q_KEY_CODE_SEMICOLON] = KEY_SEMICOLON,
+    [Q_KEY_CODE_APOSTROPHE] = KEY_APOSTROPHE,
+    [Q_KEY_CODE_GRAVE_ACCENT] = KEY_GRAVE,
+    [Q_KEY_CODE_SHIFT] = KEY_LEFTSHIFT,
+    [Q_KEY_CODE_BACKSLASH] = KEY_BACKSLASH,
+    [Q_KEY_CODE_Z] = KEY_Z,
+    [Q_KEY_CODE_X] = KEY_X,
+    [Q_KEY_CODE_C] = KEY_C,
+    [Q_KEY_CODE_V] = KEY_V,
+    [Q_KEY_CODE_B] = KEY_B,
+    [Q_KEY_CODE_N] = KEY_N,
+    [Q_KEY_CODE_M] = KEY_M,
+    [Q_KEY_CODE_COMMA] = KEY_COMMA,
+    [Q_KEY_CODE_DOT] = KEY_DOT,
+    [Q_KEY_CODE_SLASH] = KEY_SLASH,
+    [Q_KEY_CODE_SHIFT_R] = KEY_RIGHTSHIFT,
+    [Q_KEY_CODE_ALT] = KEY_LEFTALT,
+    [Q_KEY_CODE_SPC] = KEY_SPACE,
+    [Q_KEY_CODE_CAPS_LOCK] = KEY_CAPSLOCK,
+    [Q_KEY_CODE_F1] = KEY_F1,
+    [Q_KEY_CODE_F2] = KEY_F2,
+    [Q_KEY_CODE_F3] = KEY_F3,
+    [Q_KEY_CODE_F4] = KEY_F4,
+    [Q_KEY_CODE_F5] = KEY_F5,
+    [Q_KEY_CODE_F6] = KEY_F6,
+    [Q_KEY_CODE_F7] = KEY_F7,
+    [Q_KEY_CODE_F8] = KEY_F8,
+    [Q_KEY_CODE_F9] = KEY_F9,
+    [Q_KEY_CODE_F10] = KEY_F10,
+};
+
+static void cyberdeck_kbd_event(DeviceState *dev, QemuConsole *src, InputEvent *evt)
+{
+    CyberdeckKbdState *state = (CyberdeckKbdState *)dev;
+
+    if (evt->type != INPUT_EVENT_KIND_KEY) {
+        return;
+    }
+    (void)src;
+
+    InputKeyEvent *key = evt->u.key.data;
+    int qcode = qemu_input_key_value_to_qcode(key->key);
+    bool is_down = key->down;
+
+    uint32_t button_mask = 0;
+    switch (qcode) {
+    case Q_KEY_CODE_LEFT:
+        button_mask = PBL_BTN_BACK;
+        break;
+    case Q_KEY_CODE_UP:
+        button_mask = PBL_BTN_UP;
+        break;
+    case Q_KEY_CODE_RIGHT:
+        button_mask = PBL_BTN_SELECT;
+        break;
+    case Q_KEY_CODE_DOWN:
+        button_mask = PBL_BTN_DOWN;
+        break;
+    }
+    if (button_mask) {
+        if (is_down) {
+            state->button_state |= button_mask;
+        } else {
+            state->button_state &= ~button_mask;
+        }
+        pbl_gpio_set_button_state(state->button_state);
+        return;
+    }
+
+    if (qcode >= 0 && qcode < Q_KEY_CODE__MAX && state->pctrl) {
+        unsigned int keycode = qcode_to_cyberdeck_key[qcode];
+        if (keycode) {
+            pebble_control_send_keyboard_event(state->pctrl, keycode, is_down);
+        }
+    }
+}
+
+static QemuInputHandler cyberdeck_kbd_handler = {
+    .name = "cyberdeck-keyboard",
+    .mask = INPUT_EVENT_MASK_KEY,
+    .event = cyberdeck_kbd_event,
+};
+
+static CyberdeckKbdState s_cyberdeck_kbd;
 
 /* ===== Machine init ===== */
 
@@ -181,11 +314,20 @@ static void pbl_generic_init(MachineState *machine)
     }
 
     /* === Pebble Control Protocol on UART1 === */
+    PebbleControl *pctrl = NULL;
     {
         Chardev *chr = serial_hd(1);
         if (chr && uart1_dev) {
-            pebble_control_create_generic(chr, uart1_dev);
+            pctrl = pebble_control_create_generic(chr, uart1_dev);
         }
+    }
+
+    if (cfg->board_type == PBL_BOARD_CYBERDECK_EVT3 && pctrl) {
+        s_cyberdeck_kbd.pctrl = pctrl;
+        s_cyberdeck_kbd.button_state = 0;
+        QemuInputHandlerState *ihs = qemu_input_handler_register(
+            (DeviceState *)&s_cyberdeck_kbd, &cyberdeck_kbd_handler);
+        qemu_input_handler_activate(ihs);
     }
 
     /* === Timers === */

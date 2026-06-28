@@ -177,12 +177,12 @@ static const unsigned int qcode_to_cyberdeck_key[Q_KEY_CODE__MAX] = {
     [Q_KEY_CODE_F1] = KEY_F1,
     [Q_KEY_CODE_F2] = KEY_F2,
     [Q_KEY_CODE_F3] = KEY_F3,
-    [Q_KEY_CODE_F4] = KEY_F4,
-    [Q_KEY_CODE_F5] = KEY_F5,
-    [Q_KEY_CODE_F6] = KEY_F6,
-    [Q_KEY_CODE_F7] = KEY_F7,
-    [Q_KEY_CODE_F8] = KEY_F8,
-    [Q_KEY_CODE_F9] = KEY_F9,
+    [Q_KEY_CODE_F4] = KEY_LEFTALT,  /* Cyberdeck Phys Alt */
+    [Q_KEY_CODE_F5] = KEY_LEFTCTRL, /* Cyberdeck Call */
+    [Q_KEY_CODE_F6] = KEY_MENU,     /* Cyberdeck Berry */
+    [Q_KEY_CODE_F7] = KEY_ESC,      /* Cyberdeck Back */
+    [Q_KEY_CODE_F8] = KEY_POWER,    /* Cyberdeck End Call */
+    [Q_KEY_CODE_F9] = KEY_LEFTMETA, /* Cyberdeck Symbol */
     [Q_KEY_CODE_F10] = KEY_F10,
 };
 
@@ -322,13 +322,6 @@ static void pbl_generic_init(MachineState *machine)
         }
     }
 
-    if (cfg->board_type == PBL_BOARD_CYBERDECK_EVT3 && pctrl) {
-        s_cyberdeck_kbd.pctrl = pctrl;
-        s_cyberdeck_kbd.button_state = 0;
-        QemuInputHandlerState *ihs = qemu_input_handler_register(
-            (DeviceState *)&s_cyberdeck_kbd, &cyberdeck_kbd_handler);
-        qemu_input_handler_activate(ihs);
-    }
 
     /* === Timers === */
     for (int i = 0; i < 2; i++) {
@@ -420,6 +413,15 @@ static void pbl_generic_init(MachineState *machine)
         sysbus_realize_and_unref(sbd, &error_fatal);
         sysbus_mmio_map(sbd, 0, PBL_GPIO_BASE);
         sysbus_connect_irq(sbd, 0, qdev_get_gpio_in(armv7m, PBL_IRQ_GPIO));
+    }
+
+    /* Register Cyberdeck keyboard after GPIO buttons so it receives key events first. */
+    if (cfg->board_type == PBL_BOARD_CYBERDECK_EVT3 && pctrl) {
+        s_cyberdeck_kbd.pctrl = pctrl;
+        s_cyberdeck_kbd.button_state = 0;
+        QemuInputHandlerState *ihs = qemu_input_handler_register(
+            (DeviceState *)&s_cyberdeck_kbd, &cyberdeck_kbd_handler);
+        qemu_input_handler_activate(ihs);
     }
 
     /* === Touch Controller (Emery/Gabbro only) === */

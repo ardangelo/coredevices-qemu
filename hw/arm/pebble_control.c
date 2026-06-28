@@ -34,6 +34,9 @@
 #include "hw/arm/pebble_simple_uart.h"
 #include "hw/arm/pebble_gpio.h"
 
+void pbl_display_set_lcd_select(bool k230);
+void pbl_display_set_vibrating(bool on);
+
 //#define DEBUG_PEBBLE_CONTROL
 #ifdef DEBUG_PEBBLE_CONTROL
 #define DPRINTF(fmt, ...)                                 \
@@ -250,7 +253,6 @@ static void pebble_control_lcd_sel_msg_callback(PebbleControl *s, const uint8_t 
         EPRINTF("%s: invalid packet\n", __func__);
         return;
     }
-    extern void pbl_display_set_lcd_select(bool k230);
     pbl_display_set_lcd_select(hdr->k230 != 0);
 }
 
@@ -496,12 +498,15 @@ static int pebble_control_write(void *opaque, const uint8_t *buf, int len) {
             break;
         }
 
-        // Intercept vibration packets for local visualization
-        if (ntohs(hdr->protocol) == QemuProtocol_Vibration && data_len >= 1) {
-            uint8_t *data = s->send_char_buf + sizeof(QemuCommChannelHdr);
+        // Intercept firmware-originated packets for local QEMU devices.
+        uint16_t protocol = ntohs(hdr->protocol);
+        uint8_t *data = s->send_char_buf + sizeof(QemuCommChannelHdr);
+        if (protocol == QemuProtocol_Vibration && data_len >= 1) {
             bool vibe_on = data[0] != 0;
-            extern void pbl_display_set_vibrating(bool on);
             pbl_display_set_vibrating(vibe_on);
+        } else if (protocol == QemuProtocol_LcdSel && data_len >= sizeof(QemuProtocolLcdSelHeader)) {
+            QemuProtocolLcdSelHeader *lcd = (QemuProtocolLcdSelHeader *)data;
+            pbl_display_set_lcd_select(lcd->k230 != 0);
         }
 
         // We have a complete packet, send it out the front end

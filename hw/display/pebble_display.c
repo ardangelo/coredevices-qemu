@@ -178,6 +178,7 @@ static bool k230_lcd_process_byte(PblDisplay *s, uint8_t data)
     uint32_t row_bytes = ((s->width + 31) / 32) * 4;
     uint32_t fb_size = row_bytes * s->height;
     bool redraw = false;
+    uint32_t line_bytes = s->width / 8;
 
     data = bitswap8(data);
     switch (s->k230_state) {
@@ -202,7 +203,7 @@ static bool k230_lcd_process_byte(PblDisplay *s, uint8_t data)
         if (s->k230_fbindex < fb_size) {
             s->k230_fb[s->k230_fbindex++] = data;
         }
-        if ((s->k230_fbindex % row_bytes) == 0) {
+        if ((s->k230_fbindex % row_bytes) == line_bytes) {
             s->k230_state = K230_LCD_TRAILER;
         }
         break;
@@ -217,12 +218,18 @@ static bool k230_lcd_process_byte(PblDisplay *s, uint8_t data)
 static int k230_lcd_can_receive(void *opaque)
 {
     PblDisplay *s = opaque;
-    return 2 + s->height * ((((s->width + 31) / 32) * 4) + 2);
+    return 2 + s->height * ((s->width / 8) + 2);
 }
 
 static void k230_lcd_receive(void *opaque, const uint8_t *buf, int size)
 {
     PblDisplay *s = opaque;
+
+    /* Keep the K230 framebuffer current even while the nRF LCD is selected.
+     * The firmware may ask K230 to redraw immediately after switching the mux;
+     * depending on UART scheduling, display bytes can arrive before the lcd_sel
+     * notification is processed here. Dropping hidden frames leaves stale nRF
+     * content on screen after the mux switches. */
     for (int i = 0; i < size; i++) {
         if (k230_lcd_process_byte(s, buf[i]) && s->lcd_sel_k230) {
             s->redraw = true;

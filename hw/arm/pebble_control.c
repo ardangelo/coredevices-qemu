@@ -556,7 +556,16 @@ static void pebble_control_send_packet(PebbleControl *s, QemuProtocol protocol, 
 static void pebble_control_send_packet_to_firmware(PebbleControl *s, QemuProtocol protocol,
                                                    void *data, uint32_t len)
 {
-    uint8_t packet_buffer[PBLCONTROL_BUF_LEN];
+    uint32_t total_size = sizeof(QemuCommChannelHdr) + len
+                          + sizeof(QemuCommChannelFooter);
+
+    if (len > QEMU_MAX_DATA_LEN ||
+        total_size > sizeof(s->rcv_char_buf) - s->rcv_char_bytes) {
+        EPRINTF("%s: dropping firmware packet, receive buffer full\n", __func__);
+        return;
+    }
+
+    uint8_t *packet = s->rcv_char_buf + s->rcv_char_bytes;
     uint32_t offset = 0;
 
     QemuCommChannelHdr hdr = {
@@ -564,27 +573,18 @@ static void pebble_control_send_packet_to_firmware(PebbleControl *s, QemuProtoco
         .protocol = htons(protocol),
         .len = htons(len),
     };
-    memcpy(packet_buffer + offset, &hdr, sizeof(hdr));
+    memcpy(packet + offset, &hdr, sizeof(hdr));
     offset += sizeof(hdr);
-    memcpy(packet_buffer + offset, data, len);
+    memcpy(packet + offset, data, len);
     offset += len;
     QemuCommChannelFooter footer = {
         .signature = htons(QEMU_FOOTER_SIGNATURE),
     };
-    memcpy(packet_buffer + offset, &footer, sizeof(footer));
+    memcpy(packet + offset, &footer, sizeof(footer));
     offset += sizeof(footer);
 
-    uint32_t sent = 0;
-    while (sent < offset) {
-        int can_read = s->uart_chr_can_read(s->uart);
-        if (can_read <= 0) {
-            EPRINTF("%s: firmware UART cannot receive injected packet\n", __func__);
-            break;
-        }
-        int chunk = MIN(can_read, (int)(offset - sent));
-        s->uart_chr_read(s->uart, packet_buffer + sent, chunk);
-        sent += chunk;
-    }
+    s->rcv_char_bytes += offset;
+    pebble_control_parse_receive_buffer(s);
 }
 
 void pebble_control_send_keyboard_event(PebbleControl *s, uint8_t keycode, bool is_down)

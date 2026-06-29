@@ -194,9 +194,13 @@ static bool k230_lcd_process_byte(PblDisplay *s, uint8_t data)
     case K230_LCD_LINENO:
         if (data == 0) {
             s->k230_state = K230_LCD_COMMAND;
-        } else {
+        } else if (data <= s->height) {
             s->k230_fbindex = (data - 1) * row_bytes;
             s->k230_state = K230_LCD_DATA;
+        } else {
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "pebble-display: invalid K230 line %u\n", data);
+            s->k230_state = K230_LCD_COMMAND;
         }
         break;
     case K230_LCD_DATA:
